@@ -1,6 +1,5 @@
-variable "ssh_mount_path" {
+variable "vault_mount_postgres_path" {
   type = string
-  default = "ssh"
 }
 variable "database_connection_name" {
   type = string

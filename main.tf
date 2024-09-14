@@ -1,28 +1,52 @@
-locals {}
-
-resource "vault_ssh_secret_backend_role" "this" {
-  backend = var.ssh_mount_path
-  name                    = "my-role"
-  key_type                = "ca"
-  allow_user_certificates = true
-  # allowed_user_key_config {
-  #   type    = "ed25519"
-  #   lengths = [2048, 4096]
-  # }
-  default_user = "ubuntu"
-  allowed_users = "*"
-  ttl = "28800"
-  max_ttl = "28800"
-  default_extensions = {"permit-pty"=""}
+locals {
+  # --- The connection string for the database can contain more than one host, so handling string creation for that case here.
+  database_address = join("," , [ for address in var.database_addresses: "${address}:${var.database_port}"])
 }
 
+resource "vault_database_secret_backend_connection" "this" {
+  plugin_name   = "postgresql-database-plugin"
+  backend       = var.vault_mount_postgres_path
+  name          = var.database_connection_name
+  allowed_roles = [
+    for role in var.database_roles: role.name
+  ]
+  #verify_connection = true
+
+  data = {
+		"username" = var.database_username
+		"password" = var.database_password
+	}
+
+  postgresql {
+    connection_url = "postgresql://{{username}}:{{password}}@${local.database_address}/${var.database_name}?sslmode=${var.database_sslmode}"
+    username = var.database_username
+		password = var.database_password
+  }
+}
+
+resource "vault_generic_endpoint" "this" {
+  path = "${var.vault_mount_postgres_path}/rotate-root/${vault_database_secret_backend_connection.this.name}"
+  disable_read   = true
+  disable_delete = true
+
+  data_json      = "{}"
+
+}
+
+resource "vault_database_secret_backend_role" "this" {
+  for_each = { for role in var.database_roles: role.name => role }
+  backend = var.vault_mount_postgres_path
+  name    = each.value.name
+  db_name = vault_database_secret_backend_connection.this.name
+  creation_statements = each.value.creation_statements
+}
 
 resource "vault_policy" "this" {
   for_each = { for role in vault_database_secret_backend_role.this: role.name => role }
 
   name = each.value.name
   policy =<<EOH
-path "${vault_ssh_secret_backend_role.this.backend}/creds/${each.value.name}" {
+path "${each.value.backend}/creds/${each.value.name}" {
     capabilities = ["read"]
 }
 EOH 
